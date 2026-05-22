@@ -1,7 +1,7 @@
 import openpyxl
 import copy
 from pptx import Presentation
-# test
+
 def load_names_from_excel(file_path):
     wb = openpyxl.load_workbook(file_path)
     sheet = wb.active
