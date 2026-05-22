@@ -6,16 +6,18 @@ def load_names_from_excel(file_path):
     wb = openpyxl.load_workbook(file_path)
     sheet = wb.active
     names = []
-    # Skip header
-    for row in sheet.iter_rows(min_row=2, max_col=1):
-        cell = row[0]
-        if cell.value:
-            val = str(cell.value).strip()
+    # Skip header row and read both Column 1 (Name) and Column 2 (Department)
+    for row in sheet.iter_rows(min_row=2, max_col=2):
+        cell_name = row[0]
+        cell_dept = row[1]
+        if cell_name.value:
+            val_name = str(cell_name.value).strip()
+            val_dept = str(cell_dept.value).strip() if cell_dept.value is not None else ""
             # Skip bold headers (e.g. BACHELOR OF..., Emphasis in...)
-            if cell.font and cell.font.bold:
-                print(f"Skipping program/section heading: '{val}'")
+            if cell_name.font and cell_name.font.bold:
+                print(f"Skipping program/section heading: '{val_name}'")
                 continue
-            names.append(val)
+            names.append((val_name, val_dept))
     return names
 
 def create_lowerthird_ppt(names, template_file='template.pptx', output_file='lowerthirds.pptx'):
@@ -48,18 +50,21 @@ def create_lowerthird_ppt(names, template_file='template.pptx', output_file='low
     print(f"Generating {len(names)} slides...")
 
     # Process remaining names by creating new slides and copying template shapes
-    for i, name in enumerate(names[1:], start=1):
+    for i, (name, dept) in enumerate(names[1:], start=1):
         new_slide = prs.slides.add_slide(template_slide.slide_layout)
         
         # Copy shapes XML
         for shape_type, shape_el in template_shapes_xml:
             new_el = copy.deepcopy(shape_el)
             
-            # Replace placeholder in XML directly to ensure persistence on save
+            # Replace placeholders in XML directly to ensure persistence on save
             t_tag = '{http://schemas.openxmlformats.org/drawingml/2006/main}t'
             for t_node in new_el.findall(f'.//{t_tag}'):
-                if t_node.text and "Name" in t_node.text:
-                    t_node.text = t_node.text.replace("Name", name)
+                if t_node.text:
+                    if "Name" in t_node.text:
+                        t_node.text = t_node.text.replace("Name", name)
+                    if "Department" in t_node.text:
+                        t_node.text = t_node.text.replace("Department", dept)
             
             new_slide.shapes._spTree.append(new_el)
             
@@ -78,18 +83,21 @@ def create_lowerthird_ppt(names, template_file='template.pptx', output_file='low
                 except Exception as e:
                     print(f"Failed to map picture relationship on slide {i}: {e}")
 
-    # Process first name in-place on the original slide 0 at the very end
+    # Process first name and department in-place on the original slide 0 at the very end
     slide0 = prs.slides[0]
     replaced_first = False
+    first_name, first_dept = names[0]
     for shape in slide0.shapes:
         if shape.has_text_frame:
             for paragraph in shape.text_frame.paragraphs:
                 for run in paragraph.runs:
                     if "Name" in run.text:
-                        run.text = run.text.replace("Name", names[0])
+                        run.text = run.text.replace("Name", first_name)
                         replaced_first = True
+                    if "Department" in run.text:
+                        run.text = run.text.replace("Department", first_dept)
     if replaced_first:
-        print(f"Slide 0 name replaced: '{names[0]}'")
+        print(f"Slide 0 replaced: '{first_name}' - '{first_dept}'")
                             
     # Save the output presentation
     prs.save(output_file)
