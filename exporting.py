@@ -1,98 +1,100 @@
 import openpyxl
+import copy
 from pptx import Presentation
-from pptx.util import Inches, Pt
-from pptx.enum.shapes import MSO_SHAPE
-from pptx.dml.color import RGBColor
-from pptx.enum.dml import MSO_LINE
 
-# Load names from Excel file
 def load_names_from_excel(file_path):
     wb = openpyxl.load_workbook(file_path)
     sheet = wb.active
     names = []
-    for row in sheet.iter_rows(min_row=2, max_col=1, values_only=True):
-        if row[0]:
-            names.append(row[0])
+    # Skip header
+    for row in sheet.iter_rows(min_row=2, max_col=1):
+        cell = row[0]
+        if cell.value:
+            val = str(cell.value).strip()
+            # Skip bold headers (e.g. BACHELOR OF..., Emphasis in...)
+            if cell.font and cell.font.bold:
+                print(f"Skipping program/section heading: '{val}'")
+                continue
+            names.append(val)
     return names
 
-# Create lower-third slide for each name
-def create_lowerthird_ppt(names, output_file='lowerthirds.pptx'):
-    prs = Presentation()
+def create_lowerthird_ppt(names, template_file='template.pptx', output_file='lowerthirds.pptx'):
+    if not names:
+        print("No student names loaded. Exiting.")
+        return
 
-    for name in names:
-        slide = prs.slides.add_slide(prs.slide_layouts[6])  # Blank layout
+    # Load presentation
+    prs = Presentation(template_file)
+    template_slide = prs.slides[0]
+    
+    # Store shapes XML and picture relationship mappings from the template slide
+    template_shapes_xml = []
+    template_rels = {}
+    for shape in template_slide.shapes:
+        shape_el = copy.deepcopy(shape.element)
+        template_shapes_xml.append((shape.shape_type, shape_el))
+        
+        if shape.shape_type == 13: # PICTURE
+            try:
+                blip_tag = '{http://schemas.openxmlformats.org/drawingml/2006/main}blip'
+                blip = shape.element.find(f'.//{blip_tag}')
+                if blip is not None:
+                    rId_attr = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed'
+                    old_rId = blip.get(rId_attr)
+                    template_rels[old_rId] = template_slide.part.rels[old_rId]
+            except Exception as e:
+                print(f"Failed to cache picture relationship: {e}")
 
-        # Add textbox for lower third
-        left = Inches(1)
-        top = Inches(5.5)  # Near the bottom
-        width = Inches(8)
-        height = Inches(1)
+    print(f"Generating {len(names)} slides...")
 
-        # Set slide size to 16:9 (13.33 x 7.5 inches)
-        prs.slide_width = Inches(13.33)
-        prs.slide_height = Inches(7.5)
+    # Process remaining names by creating new slides and copying template shapes
+    for i, name in enumerate(names[1:], start=1):
+        new_slide = prs.slides.add_slide(template_slide.slide_layout)
+        
+        # Copy shapes XML
+        for shape_type, shape_el in template_shapes_xml:
+            new_el = copy.deepcopy(shape_el)
+            
+            # Replace placeholder in XML directly to ensure persistence on save
+            t_tag = '{http://schemas.openxmlformats.org/drawingml/2006/main}t'
+            for t_node in new_el.findall(f'.//{t_tag}'):
+                if t_node.text and "Name" in t_node.text:
+                    t_node.text = t_node.text.replace("Name", name)
+            
+            new_slide.shapes._spTree.append(new_el)
+            
+            # Map picture relationships
+            if shape_type == 13: # PICTURE
+                try:
+                    blip_tag = '{http://schemas.openxmlformats.org/drawingml/2006/main}blip'
+                    blip = new_el.find(f'.//{blip_tag}')
+                    if blip is not None:
+                        rId_attr = '{http://schemas.openxmlformats.org/officeDocument/2006/relationships}embed'
+                        old_rId = blip.get(rId_attr)
+                        rel = template_rels.get(old_rId)
+                        if rel is not None:
+                            new_rId = new_slide.part.relate_to(rel.target_part, rel.reltype)
+                            blip.set(rId_attr, new_rId)
+                except Exception as e:
+                    print(f"Failed to map picture relationship on slide {i}: {e}")
 
-        # Set slide background color to red
-        background = slide.background
-        fill = background.fill
-        fill.solid()
-        # Set slide background color to hex #0070C0
-        fill.fore_color.rgb = RGBColor.from_string('0070C0')
-        textbox = slide.shapes.add_textbox(left, top, width, height)
-        text_frame = textbox.text_frame
-        text_frame.text = name
-
-        # Format text
-        p = text_frame.paragraphs[0]
-        from pptx.enum.text import PP_ALIGN
-        p.alignment = PP_ALIGN.CENTER  # Center horizontally
-
-        # Vertically center the text frame content
-        from pptx.enum.text import MSO_ANCHOR
-        text_frame.vertical_anchor = MSO_ANCHOR.MIDDLE
-
-        run = p.runs[0]
-        run.font.size = Pt(28)
-        run.font.bold = True
-        run.font.color.rgb = RGBColor.from_string('FFFFFF')
-
-        # Make textbox width same as slide width
-        textbox.width = prs.slide_width
-        textbox.left = 0
-
-        # Set background color of the textbox
-        fill = textbox.fill
-        fill.solid()  # Start with solid fill to reset
-        fill.gradient()  # Switch to gradient fill
-        fill.gradient_angle = 0  # Horizontal gradient (left to right)
-        # Set gradient stops
-        stop_main = fill.gradient_stops[0]
-        stop_main.position = 0.5  # Center focus
-        stop_main.color.rgb = RGBColor.from_string('6F0F11')
-        stop_side = fill.gradient_stops[1]
-        stop_side.position = 1.0
-        # Use a similar color for the side (slightly lighter)
-        stop_side.color.rgb = RGBColor.from_string('8F1F21')
-
-        # Add rounded border
-        # Add only a bottom border (simulate by adding a thin rectangle shape)
-        border_height = Pt(6)  # Thickness of the bottom line
-        border = slide.shapes.add_shape(
-            MSO_SHAPE.RECTANGLE,
-            textbox.left,
-            textbox.top + textbox.height - border_height,
-            textbox.width,
-            border_height
-        )
-        border.fill.solid()
-        border.fill.fore_color.rgb = RGBColor(255, 215, 0)  # Gold color
-        border.line.fill.background()  # No outline
-        border.shadow.inherit = False
-
+    # Process first name in-place on the original slide 0 at the very end
+    slide0 = prs.slides[0]
+    replaced_first = False
+    for shape in slide0.shapes:
+        if shape.has_text_frame:
+            for paragraph in shape.text_frame.paragraphs:
+                for run in paragraph.runs:
+                    if "Name" in run.text:
+                        run.text = run.text.replace("Name", names[0])
+                        replaced_first = True
+    if replaced_first:
+        print(f"Slide 0 name replaced: '{names[0]}'")
+                            
+    # Save the output presentation
     prs.save(output_file)
-    print(f"Presentation saved as {output_file}")
+    print(f"Success: {output_file} created with {len(names)} slides.")
 
-# Main
-excel_file = 'names.xlsx'  # <-- Change if needed
-names = load_names_from_excel(excel_file)
-create_lowerthird_ppt(names)
+if __name__ == "__main__":
+    names = load_names_from_excel('names.xlsx')
+    create_lowerthird_ppt(names)
